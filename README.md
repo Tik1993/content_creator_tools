@@ -22,3 +22,16 @@ The workflow involves three main steps:
    - Use the collected feedback to create a structured product review summarizing the customers’ opinions.  
 
 ---
+## 🏁 Getting Started
+
+### 1. Clone the Repository
+```bash
+git clone https://github.com/Tik1993/content_creator_tools.git
+cd content_creator_tools
+```
+
+### 2. Configure Environment Variables
+```bash
+OPENAI_API_KEY=your_api_key_here
+TAVILY_API_KEY=your_search_api_key_here
+```
