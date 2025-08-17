@@ -71,7 +71,7 @@ def human_feedback(state:GenerateCustomersState):
     pass
 
 def should_continue(state:GenerateCustomersState):
-    print("should_continue")
+    # print("should_continue")
     human_analyst_feedback= state.get('human_analyst_feedback',None)
     if human_analyst_feedback:
         return "create_customers"
@@ -103,15 +103,15 @@ for event in graph.stream({"topic":topic, "max_customers":max_customers}, thread
             print("-"*50)
 
 state = graph.get_state(thread)
-print(state)
+# print(state)
 while True:
     user_approval = input("Do you want to revise the customers? (yes/no)")
 
     if user_approval.lower() == "yes":
         feedback = input("provide feedback: ")
         graph.update_state(thread, {"human_analyst_feedback":feedback}, as_node="human_feedback")
-        state = graph.get_state(thread)
-        print(state)
+        # state = graph.get_state(thread)
+        # print(state)
         for event in graph.stream(None, thread, stream_mode="values"):
             customers = event.get('customers','')
             if customers:
@@ -126,4 +126,6 @@ while True:
         break
 
 final_state = graph.get_state(thread)
-print(final_state.values.get("customers"))
+# print(final_state.values.get("customers"))
+customers = final_state.values.get("customers")
+print(customers[0].persona)
