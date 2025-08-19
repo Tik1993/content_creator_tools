@@ -34,8 +34,8 @@ class InterviewState(MessagesState):
     max_num_turns:int 
     context: Annotated[List, operator.add]
     customer: Customer
-    # interview:str
-    # sections:list
+    interview:str
+    sections:list
 
 class SearchQuery(BaseModel):
     search_query:str = Field(None, description="Search query for retrieval.")
@@ -77,6 +77,7 @@ Pay particular attention to the final question posed by the analyst.
 Convert this final question into a well-structured web search query""")
 
 def search_web(state:InterviewState):
+    print("search_web")
 
     structured_llm = llm.with_structured_output(SearchQuery)
     search_query = structured_llm.invoke([search_instructions]+state['messages'])
@@ -93,6 +94,7 @@ def search_web(state:InterviewState):
     return {"context":[formatted_search_docs]}
 
 def search_wikipedia(state:InterviewState):
+    print("search_wikipedia")
     structured_llm = llm.with_structured_output(SearchQuery)
     search_query = structured_llm.invoke([search_instructions]+state['messages'])
 
@@ -124,6 +126,7 @@ And skip the addition of the brackets as well as the Document source preamble in
 """
 
 def generate_answer(state:InterviewState):
+    print("generate_answer")
     customer = state["customer"]
     messages = state["messages"]
     context = state["context"]
@@ -135,6 +138,90 @@ def generate_answer(state:InterviewState):
 
     return{"messages":[answer]}
 
+
+from langchain_core.messages import get_buffer_string
+
+def save_interview(state: InterviewState):
+    print("save_interview")
+    messages = state["messages"]
+    interview = get_buffer_string(messages)
+    return {"interview":interview}
+
+
+def route_messages (state:InterviewState, name:str="customer"):
+    print("route_messages")
+    messages = state["messages"]
+    max_num_turns= state.get('max_num_turns',2)
+
+    num_responses = len([m for m in messages if isinstance(m, AIMessage) and m.name == name])
+    print(num_responses)
+    if num_responses >= max_num_turns:
+        return 'save_interview'
+    
+    last_question = messages[-2]
+
+    if "Thank you so much for your help!" in last_question.content:
+        return "save_interview"
+    return "ask_question"
+
+#write review
+section_writer_instructions = """ 
+You are an expert technical writer.
+Your task is to create a short, easily digestible section of a report based on a set of source documents.
+1. Analyze the content of the source documents:
+- The name of each source document is at the start of the document, with the <Document tag.
+2. Create a report structure using markdoen formatting:
+- Use ## for the section title
+- Use ### for sub-section headers
+3. Write the report following this structure:
+a. Title (## header)
+b. Summary (### header)
+c. Sources (### header)
+4. Make your title engaging based upon the focus area of the analyst: 
+{focus}
+5. For the summary section:
+- Set up summary with general background / context related to the focus area of the analyst
+- Emphasize what is novel, interesting, or surprising about insights gathered from the interview
+- Create a numbered list of source documents, as you use them
+- Do not mention the names of interviewers or experts
+- Aim for approximately 400 words maximum
+- Use numbered sources in your report (e.g., [1], [2]) based on information from source documents
+6. In the Sources section:
+- Include all sources used in your report
+- Provide full links to relevant websites or specific document paths
+- Separate each source by a newline. Use two spaces at the end of each line to create a newline in Markdown.
+- It will look like:
+
+### Sources
+[1] Link or Document name
+[2] Link or Document name
+
+7. Be sure to combine sources. For example this is not correct:
+
+[3] https://ai.meta.com/blog/meta-llama-3-1/
+[4] https://ai.meta.com/blog/meta-llama-3-1/
+
+There should be no redundant sources. It should simply be:
+
+[3] https://ai.meta.com/blog/meta-llama-3-1/
+        
+8. Final review:
+- Ensure the report follows the required structure
+- Include no preamble before the title of the report
+- Check that all guidelines have been followed
+"""
+
+def write_section(state:InterviewState):
+    print("write_section")
+    interview = state["interview"]
+    context=state["context"]
+    customer=state["customer"]
+
+    system_message = section_writer_instructions.format(focus=customer.description)
+    section = llm.invoke([SystemMessage(content=system_message)]+ [HumanMessage(content=f"Use this source to write your section: {interview}")])
+
+    return {"sections":[section.content]}
+
 from langgraph.graph import START, END, StateGraph
 from langgraph.checkpoint.memory import MemorySaver
 
@@ -143,14 +230,17 @@ interview_builder.add_node("ask_question", generate_question)
 interview_builder.add_node("search_web", search_web)
 interview_builder.add_node("search_wikipedia", search_wikipedia)
 interview_builder.add_node("answer_question", generate_answer)
+interview_builder.add_node("save_interview", save_interview)
+interview_builder.add_node("write_section",write_section)
 
 interview_builder.add_edge(START, "ask_question")
 interview_builder.add_edge("ask_question", "search_web")
 interview_builder.add_edge("ask_question", "search_wikipedia")
 interview_builder.add_edge("search_web", "answer_question")
 interview_builder.add_edge("search_wikipedia", "answer_question")
-interview_builder.add_edge("answer_question", END)
-
+interview_builder.add_conditional_edges("answer_question", route_messages, ['ask_question', "save_interview"])
+interview_builder.add_edge("save_interview", "write_section")
+interview_builder.add_edge("write_section", END)
 memory = MemorySaver()
 interview_graph = interview_builder.compile(checkpointer=memory)
 
@@ -162,6 +252,7 @@ messages= [HumanMessage(f"So you said you were writing an article on {topic}?")]
 max_num_turns=2
 interview = interview_graph.invoke({"customer":customer, "messages":messages, "max_num_turns":max_num_turns}, thread)
 
-for m in interview["messages"]:
-    m.pretty_print()
+# for m in interview["messages"]:
+#     m.pretty_print()
 
+print(interview["sections"])
