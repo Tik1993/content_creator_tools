@@ -259,7 +259,7 @@ def write_section(state:InterviewState):
     customer=state["customer"]
 
     system_message = section_writer_instructions.format(focus=customer.description)
-    section = llm.invoke([SystemMessage(content=system_message)]+ [HumanMessage(content=f"Use this source to write your section: {interview}")])
+    section = llm.invoke([SystemMessage(content=system_message)]+ [HumanMessage(content=f"Use this source to write your section: {context}")])
 
     return {"sections":[section.content]}
 
@@ -286,6 +286,8 @@ class ResearchGraphState(TypedDict):
     human_analyst_feedback:str
     customers:List[Customer]
     sections: Annotated[list, operator.add]
+    content:str
+    final_report: str
 
 
 def inititate_all_interviews(state:ResearchGraphState):
@@ -295,24 +297,86 @@ def inititate_all_interviews(state:ResearchGraphState):
     else:
         topic=state["topic"]
         return [Send("conduct_interview",{"customer":customer,"messages":[HumanMessage(content=f"So you said you were writing an article on {topic}?")]})for customer in state["customers"]]
+
+#writing final report
+report_writer_instructions = """You are a technical writer creating a report on this overall topic: 
+
+{topic}
     
+You have a team of analysts. Each analyst has done two things: 
+
+1. They conducted an interview with an expert on a specific sub-topic.
+2. They write up their finding into a memo.
+
+Your task: 
+
+1. You will be given a collection of memos from your analysts.
+2. Think carefully about the insights from each memo.
+3. Consolidate these into a crisp overall summary that ties together the central ideas from all of the memos. 
+4. Summarize the central points in each memo into a cohesive single narrative.
+
+To format your report:
+ 
+1. Use markdown formatting. 
+2. Include no pre-amble for the report.
+3. Use no sub-heading. 
+4. Start your report with a single title header: ## Insights
+5. Do not mention any analyst names in your report.
+6. Preserve any citations in the memos, which will be annotated in brackets, for example [1] or [2].
+7. Create a final, consolidated list of sources and add to a Sources section with the `## Sources` header.
+8. List your sources in order and do not repeat.
+
+[1] Source 1
+[2] Source 2
+
+Here are the memos from your analysts to build your report from: 
+
+{context}"""
+
+def write_report(state:ResearchGraphState):
+    sections = state["sections"]
+    topic = state["topic"]
+    formatted_str_sections = "\n\n".join([f"{section}" for section in sections])
+    system_message = report_writer_instructions.format(topic=topic,context=formatted_str_sections)
+    report = llm.invoke([SystemMessage(content=system_message)]+[HumanMessage(content=f"Write a report based upon these memos.")])
+    return {"content":report.content}
+
+def finalize_report(state:ResearchGraphState):
+    content = state["content"]
+    if content.startswith("## Insights"):
+        content = content.strip("## Insights")
+    if "## Sources" in content:
+        try:
+            content, sources = content.split("\n## Sources\n")
+        except:
+            sources = None
+    else:
+        sources = None
+    final_report = content
+    if sources is not None:
+        final_report += "\n\n## Sources\n" + sources
+    return {"final_report": final_report}
 
 builder = StateGraph(ResearchGraphState)
 builder.add_node("create_customers", create_customers)
 builder.add_node("human_feedback",human_feedback)
-builder.add_node("conduct_interview",interview_builder.compile())
+builder.add_node("conduct_interview", interview_builder.compile())
+builder.add_node("write_report",write_report)
+builder.add_node("finalize_report",finalize_report)
 
 builder.add_edge(START, "create_customers")
 builder.add_edge("create_customers", "human_feedback")
 builder.add_conditional_edges("human_feedback", inititate_all_interviews,["create_customers","conduct_interview"])
-builder.add_edge("conduct_interview",END)
+builder.add_edge("conduct_interview","write_report")
+builder.add_edge("write_report","finalize_report")
+builder.add_edge("finalize_report",END)
 
 memory = MemorySaver()
 graph = builder.compile(interrupt_before=['human_feedback'], checkpointer=memory)
 
 #input
 max_customers = 3
-topic = " the latest snowbaord binding Fuse"
+topic = "Write a comment about the latest iphone 17"
 thread = {"configurable":{"thread_id":"1"}}
 
 for event in graph.stream({"topic":topic, "max_customers":max_customers}, thread, stream_mode="values"):
@@ -352,8 +416,7 @@ for event in graph.stream(None, thread, stream_mode="updates"):
     print("--Node--")
     node_name = next(iter(event.keys()))
     print(node_name)
-    
+
 final_state = graph.get_state(thread)
-sections= final_state.values.get("sections")
-for s in sections:
-    print(s)
+final_report= final_state.values.get("final_report")
+print(final_report)
